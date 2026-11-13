@@ -1,0 +1,6 @@
+# Windows 设备名残留（如 `head CON` 产生）
+CON
+PRN
+AUX
+NUL
+COM1
