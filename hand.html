@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>Hand Landmarker 测试</title>
+<style>
+  body{margin:0;background:#0f1115;color:#e6e6e6;font:14px system-ui}
+  #wrap{position:relative;width:640px;height:480px;margin:16px auto}
+  video,canvas{position:absolute;inset:0;width:640px;height:480px;transform:scaleX(-1)}
+  #log{width:640px;margin:0 auto;white-space:pre;color:#8a93a6}
+  button{display:block;margin:12px auto;padding:8px 16px;background:#4f8cff;color:#fff;border:0;border-radius:4px;cursor:pointer}
+</style>
+</head>
+<body>
+<button id="start">开启摄像头</button>
+<div id="wrap"><video autoplay muted playsinline></video><canvas width="640" height="480"></canvas></div>
+<div id="log">加载模型中…</div>
+
+<script type="module">
+import { HandLandmarker, FilesetResolver, DrawingUtils } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+
+const log = document.getElementById('log');
+const video = document.querySelector('video');
+const canvas = document.querySelector('canvas');
+const ctx = canvas.getContext('2d');
+const draw = new DrawingUtils(ctx);
+
+const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+const landmarker = await HandLandmarker.createFromOptions(vision, {
+  baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task', delegate: 'GPU' },
+  runningMode: 'VIDEO', numHands: 1,
+});
+log.textContent = `模型就绪 · ${navigator.userAgent.includes('Edg/') ? 'Edge' : 'Chrome'}`;
+
+document.getElementById('start').onclick = async (e) => {
+  video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+  e.target.remove();
+  video.addEventListener('loadeddata', loop);
+};
+
+// 捏合：迟滞阈值（进 <0.045 / 出 >0.065）+ 指尖 EMA 平滑；避免边界抖动误触发
+const IN = 0.045, OUT = 0.065, ALPHA = 0.4;
+let lastT = -1, pinched = false, frames = 0, fpsT = performance.now(), fps = 0;
+let sm = null;                                 // 平滑后的食指尖
+// 稳定性统计（30s 窗口）
+const S = { start: performance.now(), frames: 0, miss: 0, fpsMin: 99, pinchEdges: 0, rawFlips: 0, rawPinched: false, jitter: [] };
+let prev = null;
+function loop(){
+  if (video.currentTime !== lastT) {
+    lastT = video.currentTime;
+    const r = landmarker.detectForVideo(video, performance.now());
+    ctx.clearRect(0, 0, 640, 480);
+    let info = '未检测到手';
+    S.frames++;
+    if (r.landmarks.length) {
+      const lm = r.landmarks[0];
+      draw.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS, { color: '#4f8cff', lineWidth: 3 });
+      draw.drawLandmarks(lm, { color: '#ffb84f', radius: 3 });
+      const d = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
+      // 原始阈值翻转次数（对照组）
+      const raw = d < 0.05; if (raw !== S.rawPinched) { S.rawPinched = raw; S.rawFlips++; }
+      // 迟滞
+      const now = pinched ? d < OUT : d < IN;
+      // 平滑 + 抖动统计（静止时的逐帧位移，单位 px@640）
+      sm = sm ? { x: sm.x + ALPHA*(lm[8].x-sm.x), y: sm.y + ALPHA*(lm[8].y-sm.y) } : { x: lm[8].x, y: lm[8].y };
+      if (prev) S.jitter.push(Math.hypot(lm[8].x-prev.x, lm[8].y-prev.y)*640); prev = { x: lm[8].x, y: lm[8].y };
+      if (S.jitter.length > 300) S.jitter.shift();
+      if (now !== pinched) { pinched = now; S.pinchEdges++; window.dispatchEvent(new CustomEvent('gesture', { detail: { type: now ? 'pinch' : 'release', x: sm.x, y: sm.y } })); }
+      info = `d=${d.toFixed(3)} ${pinched ? '● 捏合' : '○ 张开'}`;
+    } else { S.miss++; prev = null; }
+    if (++frames % 30 === 0) { const t = performance.now(); fps = Math.round(30000 / (t - fpsT)); fpsT = t; S.fpsMin = Math.min(S.fpsMin, fps); }
+    const j = S.jitter.length ? S.jitter.reduce((a,b)=>a+b,0)/S.jitter.length : 0;
+    const sec = ((performance.now()-S.start)/1000).toFixed(0);
+    log.textContent = `${fps} fps (min ${S.fpsMin}) · ${info}\n` +
+      `${sec}s  丢帧 ${S.miss}/${S.frames} (${(100*S.miss/S.frames).toFixed(1)}%)  原始翻转 ${S.rawFlips}  迟滞后边沿 ${S.pinchEdges}  指尖抖动 ${j.toFixed(2)}px/帧`;
+  }
+  requestAnimationFrame(loop);
+}
+window.addEventListener('gesture', e => console.log('gesture', e.detail));
+window.S = S;  // 控制台可直接读
+</script>
+</body>
+</html>

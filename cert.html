@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>实验证书</title>
+<style>
+  body{margin:0;background:#0f1115;color:#e6e6e6;font:14px system-ui;display:flex;flex-direction:column;align-items:center;gap:16px;padding:24px}
+  #form{display:flex;gap:10px;align-items:center}
+  input{padding:6px 10px;background:#171a21;border:1px solid #2a2f3a;color:#e6e6e6;border-radius:4px}
+  button{padding:6px 14px;background:#4f8cff;color:#fff;border:0;border-radius:4px;cursor:pointer}
+  canvas{box-shadow:0 8px 32px #0008;max-width:100%}
+  #detail{width:840px;color:#8a93a6;font-size:12px;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<div id="form">姓名 <input id="name" placeholder="请输入姓名" maxlength="12"><button id="dl">下载 PNG</button></div>
+<canvas id="cert" width="1748" height="1240"></canvas>
+<pre id="detail"></pre>
+
+<script type="module">
+import { readOps } from './oplog.js';
+import { score, evaluate, FLOW } from './fsm.js';
+
+const EXP_NAME = '食盐溶解与蒸发结晶';
+const q = new URLSearchParams(location.search);
+const run = +q.get('run') || JSON.parse(localStorage.lastRun || '{}').run;
+const last = JSON.parse(localStorage.lastRun || '{}');
+const ops = readOps().filter(o => !run || o.run === run);
+const R = score(ops);
+const elapsed = last.run === run ? last.elapsed : 0;
+const date = new Date(last.finishedAt || Date.now());
+const nameEl = document.getElementById('name');
+nameEl.value = localStorage.studentName || '';
+
+const cv = document.getElementById('cert'), c = cv.getContext('2d');
+const W = cv.width, H = cv.height;            // A5 横 148×105mm @300dpi
+const logo = new Image(); logo.src = './logo.svg';
+logo.onload = draw; logo.onerror = draw;
+
+function draw(){
+  const name = nameEl.value.trim() || '＿＿＿＿';
+  // 底：浅蓝渐变 + 细边框
+  const g = c.createLinearGradient(0, 0, W, H); g.addColorStop(0, '#eaf4ff'); g.addColorStop(1, '#d6e8fb');
+  c.fillStyle = g; c.fillRect(0, 0, W, H);
+  c.strokeStyle = '#8fb6e6'; c.lineWidth = 6; c.strokeRect(40, 40, W - 80, H - 80);
+  c.strokeStyle = '#b9d3f0'; c.lineWidth = 2; c.strokeRect(56, 56, W - 112, H - 112);
+  // Logo 右上
+  if (logo.complete && logo.naturalWidth) c.drawImage(logo, W - 300, 80, 200, 200);
+  else { c.fillStyle = '#4f8cff'; c.font = 'bold 40px system-ui'; c.textAlign = 'right'; c.fillText('AXIOM', W - 110, 150); }
+  // 标题
+  c.textAlign = 'center'; c.fillStyle = '#1d3f6e';
+  c.font = 'bold 86px "STKaiti","KaiTi",serif'; c.fillText('实 验 证 书', W / 2, 230);
+  c.font = '30px system-ui'; c.fillStyle = '#5a7ba8'; c.fillText('虚 手 实 验 室 · 操 作 规 范 性 认 证', W / 2, 290);
+  // 正文
+  c.textAlign = 'left'; c.fillStyle = '#223';
+  c.font = '38px "STKaiti","KaiTi",serif';
+  const L = 180; let y = 420;
+  const line = (k, v) => { c.fillStyle = '#5a7ba8'; c.fillText(k, L, y); c.fillStyle = '#1a2a44'; c.fillText(v, L + 260, y); y += 72; };
+  line('实验名称', EXP_NAME);
+  line('姓　　名', name);
+  line('总　　分', `${R.score} 分`);
+  line('等　　级', R.grade);
+  line('用　　时', elapsed ? `${Math.floor(elapsed / 60)} 分 ${elapsed % 60} 秒` : '—');
+  line('日　　期', `${date.getFullYear()} 年 ${date.getMonth() + 1} 月 ${date.getDate()} 日`);
+  // 评价
+  c.fillStyle = '#5a7ba8'; c.fillText('操作规范性评价', L, y);
+  c.fillStyle = '#1a2a44'; c.font = '32px "STKaiti","KaiTi",serif';
+  wrap(evaluate(R), L, y + 60, W - L - 420, 48);
+  // 大分数右侧
+  c.textAlign = 'center'; c.fillStyle = R.score >= 90 ? '#2a7d4f' : R.score >= 70 ? '#4f8cff' : '#b86b2e';
+  c.font = 'bold 160px system-ui'; c.fillText(R.score, W - 330, 620);
+  c.font = '34px system-ui'; c.fillText(R.grade, W - 330, 690);
+  // 印章 右下
+  stamp(W - 300, H - 290, 150);
+  // 页脚
+  c.textAlign = 'center'; c.fillStyle = '#8aa7cc'; c.font = '22px system-ui';
+  c.fillText(`证书编号 ${String(run || 0).slice(-8)} · 本证书由手势识别系统自动评定`, W / 2, H - 90);
+}
+function wrap(text, x, y, maxW, lh){
+  let s = '';
+  for (const ch of text) { if (c.measureText(s + ch).width > maxW) { c.fillText(s, x, y); y += lh; s = ch; } else s += ch; }
+  c.fillText(s, x, y);
+}
+function stamp(x, y, r){
+  c.save(); c.translate(x, y); c.globalAlpha = .85; c.strokeStyle = '#d6322e'; c.fillStyle = '#d6322e';
+  c.lineWidth = 8; c.beginPath(); c.arc(0, 0, r, 0, 7); c.stroke();
+  c.lineWidth = 3; c.beginPath(); c.arc(0, 0, r - 16, 0, 7); c.stroke();
+  // 环形文字
+  c.font = 'bold 30px "STKaiti","KaiTi",serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  const txt = '虚手实验室·手势操作认证', step = Math.PI * 1.5 / txt.length;
+  [...txt].forEach((ch, i) => { const a = -Math.PI * .75 - Math.PI / 2 + step * (i + .5); c.save(); c.rotate(a); c.translate(0, -(r - 40)); c.fillText(ch, 0, 0); c.restore(); });
+  // 中心五角星 + 底部文字
+  c.beginPath(); for (let i = 0; i < 5; i++) { const a = -Math.PI / 2 + i * Math.PI * 4 / 5; c.lineTo(Math.cos(a) * 34, Math.sin(a) * 34); } c.closePath(); c.fill();
+  c.font = 'bold 26px "STKaiti","KaiTi",serif'; c.fillText('虚手实验室', 0, r - 52);
+  c.restore();
+}
+nameEl.oninput = () => { localStorage.studentName = nameEl.value; draw(); };
+document.getElementById('dl').onclick = () => {
+  const name = nameEl.value.trim() || '匿名';
+  const a = document.createElement('a'); a.download = `实验证书_${name}_${R.score}.png`; a.href = cv.toDataURL('image/png'); a.click();
+};
+document.getElementById('detail').textContent = R.steps.map(s => `${s.step}. ${s.title}  ${s.got}/${s.max.toFixed(1)}${s.errors.length ? '  ' + s.errors.map(e => `-${e.deduct} ${e.label}`).join(' ') : ''}`).join('\n') + (R.bonus ? `\n零误触奖励 +${R.bonus}` : '');
+</script>
+</body>
+</html>

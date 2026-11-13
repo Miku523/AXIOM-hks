@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>手势阈值标定</title>
+<style>
+  body{margin:0;background:#0f1115;color:#e6e6e6;font:14px system-ui;display:grid;grid-template-columns:640px 1fr;gap:16px;padding:16px}
+  #wrap{position:relative;width:640px;height:480px}
+  video,canvas{position:absolute;inset:0;width:640px;height:480px;transform:scaleX(-1)}
+  button{padding:8px 14px;background:#4f8cff;color:#fff;border:0;border-radius:4px;cursor:pointer;margin:4px}
+  button.rec{background:#e5484d}
+  .row{margin:8px 0}
+  pre{background:#171a21;padding:12px;border-radius:6px;white-space:pre-wrap;font-size:12px}
+  #status{color:#8a93a6}
+  .light{display:inline-block;padding:4px 10px;border:1px solid #2a2f3a;border-radius:4px;margin:2px;cursor:pointer}
+  .light.on{border-color:#4f8cff;color:#4f8cff}
+</style>
+</head>
+<body>
+<div>
+  <div id="wrap"><video autoplay muted playsinline></video><canvas width="640" height="480"></canvas></div>
+  <div id="status">加载模型中…</div>
+</div>
+<div>
+  <div class="row">光线：
+    <span class="light on" data-l="bright">明亮</span>
+    <span class="light" data-l="normal">正常</span>
+    <span class="light" data-l="dim">昏暗</span>
+  </div>
+  <div class="row">按住录制（录制时保持该姿势，含轻微移动/旋转）：
+    <button data-pose="open">张开</button>
+    <button data-pose="pinch">捏合</button>
+    <button data-pose="fist">握拳</button>
+  </div>
+  <div class="row">
+    <button id="calc">计算最优阈值</button>
+    <button id="dump">导出样本 JSON</button>
+    <button id="clear">清空</button>
+  </div>
+  <pre id="count"></pre>
+  <pre id="out">每种光线 × 每个姿势各录 ≥5s。然后「计算」。</pre>
+</div>
+
+<script type="module">
+import { loadLandmarker, ratios, classify } from './hand.js';
+import { GESTURE } from './config.js';
+
+const video = document.querySelector('video'), ctx = document.querySelector('canvas').getContext('2d');
+const status = document.getElementById('status');
+const samples = JSON.parse(localStorage.calib || '[]');   // {light, pose, pinchR, fistR}
+let light = 'bright', recording = null, lm = null;
+
+const { lmk, HandLandmarker } = await loadLandmarker();
+video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+status.textContent = '就绪';
+
+document.querySelectorAll('.light').forEach(el => el.onclick = () => {
+  document.querySelectorAll('.light').forEach(e => e.classList.remove('on')); el.classList.add('on'); light = el.dataset.l;
+});
+document.querySelectorAll('[data-pose]').forEach(b => {
+  b.onpointerdown = () => { recording = b.dataset.pose; b.classList.add('rec'); };
+  const stop = () => { recording = null; b.classList.remove('rec'); localStorage.calib = JSON.stringify(samples); };
+  b.onpointerup = stop; b.onpointerleave = stop;
+});
+document.getElementById('clear').onclick = () => { samples.length = 0; localStorage.calib = '[]'; count(); };
+document.getElementById('dump').onclick = () => {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(samples)], { type: 'application/json' }));
+  a.download = 'calib.json'; a.click();
+};
+
+function count(){
+  const c = {}; for (const s of samples) { const k = `${s.light}/${s.pose}`; c[k] = (c[k] || 0) + 1; }
+  document.getElementById('count').textContent = Object.entries(c).map(([k, v]) => `${k}: ${v}`).join('\n') || '(无样本)';
+}
+count();
+
+let lastT = -1;
+(function loop(){
+  if (video.currentTime !== lastT && video.readyState >= 2) {
+    lastT = video.currentTime;
+    const r = lmk.detectForVideo(video, performance.now());
+    ctx.clearRect(0, 0, 640, 480);
+    lm = r.landmarks[0] || null;
+    if (lm) {
+      ctx.strokeStyle = recording ? '#e5484d' : '#4f8cff'; ctx.lineWidth = 2;
+      for (const { start, end } of HandLandmarker.HAND_CONNECTIONS) { ctx.beginPath(); ctx.moveTo(lm[start].x*640, lm[start].y*480); ctx.lineTo(lm[end].x*640, lm[end].y*480); ctx.stroke(); }
+      const q = ratios(lm), c = classify(lm);
+      if (recording) { samples.push({ light, pose: recording, pinchR: +q.pinchR.toFixed(4), fistR: +q.fistR.toFixed(4) }); if (samples.length % 10 === 0) count(); }
+      status.textContent = `pinchR=${q.pinchR.toFixed(3)} fistR=${q.fistR.toFixed(3)} → 当前判定 ${c.pose} ${(c.conf*100)|0}%  ${recording ? '● 录制 ' + recording : ''}`;
+    } else status.textContent = '未检测到手';
+  }
+  requestAnimationFrame(loop);
+})();
+
+// ---------- 网格搜索 ----------
+function predict(s, P, F, C){
+  let pose = 'open', conf = 0;
+  if (s.fistR < F) { pose = 'fist'; conf = 1 - s.fistR / F; }
+  else if (s.pinchR < P) { pose = 'pinch'; conf = 1 - s.pinchR / P; }
+  if (pose !== 'open' && conf < C) pose = 'open';
+  return pose;
+}
+function evalParams(P, F, C, subset){
+  let err = 0; for (const s of subset) if (predict(s, P, F, C) !== s.pose) err++;
+  return err / subset.length;
+}
+document.getElementById('calc').onclick = () => {
+  if (samples.length < 30) { document.getElementById('out').textContent = '样本太少'; return; }
+  const lights = ['bright', 'normal', 'dim'];
+  let best = null;
+  for (let P = 0.10; P <= 0.45; P += 0.01)
+    for (let F = 0.30; F <= 0.70; F += 0.01)
+      for (let C = 0.0; C <= 0.9; C += 0.05) {
+        // 目标：三种光线中最差的误识别率最小（最稳），其次总体
+        const per = lights.map(l => { const sub = samples.filter(s => s.light === l); return sub.length ? evalParams(P, F, C, sub) : 0; });
+        const worst = Math.max(...per), overall = evalParams(P, F, C, samples);
+        const score = worst * 10 + overall;
+        if (!best || score < best.score) best = { P: +P.toFixed(2), F: +F.toFixed(2), C: +C.toFixed(2), per, worst, overall, score };
+      }
+  const cur = lights.map(l => { const sub = samples.filter(s => s.light === l); return sub.length ? evalParams(GESTURE.PINCH, GESTURE.FIST, GESTURE.CONF, sub) : 0; });
+  const pct = v => (v * 100).toFixed(1) + '%';
+  document.getElementById('out').textContent =
+`样本 ${samples.length}
+
+当前 config.js  PINCH=${GESTURE.PINCH} FIST=${GESTURE.FIST} CONF=${GESTURE.CONF}
+  误识别率  明亮 ${pct(cur[0])}  正常 ${pct(cur[1])}  昏暗 ${pct(cur[2])}  总体 ${pct(evalParams(GESTURE.PINCH, GESTURE.FIST, GESTURE.CONF, samples))}
+
+最优（最差光线误识别最小）
+  PINCH=${best.P} FIST=${best.F} CONF=${best.C}
+  误识别率  明亮 ${pct(best.per[0])}  正常 ${pct(best.per[1])}  昏暗 ${pct(best.per[2])}  总体 ${pct(best.overall)}
+
+写入 config.js：
+  PINCH: ${best.P},
+  FIST:  ${best.F},
+  CONF:  ${best.C},`;
+};
+</script>
+</body>
+</html>

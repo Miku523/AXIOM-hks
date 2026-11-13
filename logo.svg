@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <circle cx="100" cy="100" r="92" fill="#4f8cff" opacity=".12"/>
+  <circle cx="100" cy="100" r="92" fill="none" stroke="#4f8cff" stroke-width="6"/>
+  <!-- 烧杯 -->
+  <path d="M70 60 h60 v60 a30 30 0 0 1 -60 0 z" fill="none" stroke="#1d3f6e" stroke-width="8" stroke-linejoin="round"/>
+  <path d="M74 100 h52 v20 a26 26 0 0 1 -52 0 z" fill="#4f8cff" opacity=".6"/>
+  <!-- 手 -->
+  <path d="M30 150 q10 -30 30 -20 l10 -30 q4 -8 10 -2 l-4 30 l22 -8 q8 -2 6 6 l-20 14 l16 10 q6 6 -2 10 l-24 -4 q-30 10 -44 -6 z" fill="#ffb84f" stroke="#1d3f6e" stroke-width="5" stroke-linejoin="round"/>
+  <text x="100" y="178" text-anchor="middle" font-family="system-ui" font-size="22" font-weight="700" fill="#1d3f6e">AXIOM</text>
+</svg>
